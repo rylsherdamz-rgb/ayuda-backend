@@ -242,4 +242,3 @@ async fn get_protocol_status() -> Json<StatusResponse> {
         logs,
     })
 }
-
