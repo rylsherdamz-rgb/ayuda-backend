@@ -73,8 +73,8 @@ async fn main() {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/scan", post(store_scan_json))
-        .route("/api/scan/:hash", get(handle_path_scan)) // Capture from URL (GET)
-        .route("/api/scan/:hash", post(handle_path_scan)) // Capture from URL (POST)
+        .route("/api/scan/{hash}", get(handle_path_scan)) // Fixed: used {hash} for Axum v0.8+
+        .route("/api/scan/{hash}", post(handle_path_scan)) // Fixed: used {hash} for Axum v0.8+
         .route("/api/latest-scan", get(get_latest_scan))
         .route("/api/register", post(register_citizen))
         .route("/api/status", get(get_protocol_status))
@@ -83,6 +83,7 @@ async fn main() {
 
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
+
     println!("--- AYUDA PROTOCOL BRIDGE ONLINE ---");
     println!("NODE_ADDR: {}", addr);
 
@@ -103,7 +104,6 @@ async fn handle_path_scan(
     State(state): State<AppState>,
 ) -> Json<ApiResponse> {
     update_scan_state(state, hash.clone());
-
     Json(ApiResponse {
         status: "success",
         message: format!("HANDSHAKE_CAPTURED: {}", hash),
@@ -116,7 +116,6 @@ async fn store_scan_json(
     Json(payload): Json<ScanRequest>,
 ) -> Json<ApiResponse> {
     update_scan_state(state, payload.nfc_hash.clone());
-
     Json(ApiResponse {
         status: "success",
         message: "NFC_HANDSHAKE_CAPTURED".into(),
@@ -242,3 +241,4 @@ async fn get_protocol_status() -> Json<StatusResponse> {
         logs,
     })
 }
+
