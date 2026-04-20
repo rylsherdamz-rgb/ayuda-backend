@@ -72,7 +72,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(health))
-        .route("/api/scan", post(store_scan))
+        .route("/api/scan", post(store_scan_json))
+        .route("/api/scan/:hash", get(handle_path_scan)) // Capture from URL (GET)
+        .route("/api/scan/:hash", post(handle_path_scan)) // Capture from URL (POST)
         .route("/api/latest-scan", get(get_latest_scan))
         .route("/api/register", post(register_citizen))
         .route("/api/status", get(get_protocol_status))
@@ -96,10 +98,33 @@ async fn health() -> Json<ApiResponse> {
     })
 }
 
-async fn store_scan(
+async fn handle_path_scan(
+    Path(hash): Path<String>,
+    State(state): State<AppState>,
+) -> Json<ApiResponse> {
+    update_scan_state(state, hash.clone());
+
+    Json(ApiResponse {
+        status: "success",
+        message: format!("HANDSHAKE_CAPTURED: {}", hash),
+        result: None,
+    })
+}
+
+async fn store_scan_json(
     State(state): State<AppState>,
     Json(payload): Json<ScanRequest>,
 ) -> Json<ApiResponse> {
+    update_scan_state(state, payload.nfc_hash.clone());
+
+    Json(ApiResponse {
+        status: "success",
+        message: "NFC_HANDSHAKE_CAPTURED".into(),
+        result: None,
+    })
+}
+
+fn update_scan_state(state: AppState, hash: String) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -107,15 +132,9 @@ async fn store_scan(
 
     let mut scan = state.latest_scan.lock().unwrap();
     *scan = Some(NfcData {
-        hash: payload.nfc_hash,
+        hash,
         timestamp: now,
     });
-
-    Json(ApiResponse {
-        status: "success",
-        message: "NFC_HANDSHAKE_CAPTURED".into(),
-        result: None,
-    })
 }
 
 async fn get_latest_scan(State(state): State<AppState>) -> Json<ScanResponse> {
@@ -223,3 +242,4 @@ async fn get_protocol_status() -> Json<StatusResponse> {
         logs,
     })
 }
+
