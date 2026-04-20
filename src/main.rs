@@ -48,8 +48,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(|| async { "Ayuda Bridge Online" }))
-        .route("/api/scan/:hash", get(handle_incoming_scan))
-        .route("/api/scan/:hash", post(handle_incoming_scan))
+        .route("/api/scan/{hash}", get(handle_incoming_scan))
+        .route("/api/scan/{hash}", post(handle_incoming_scan))
         .route("/api/latest-scan", get(get_latest_scan))
         .route("/api/register", post(register_citizen))
         .route("/api/claim", post(claim_aid))
@@ -218,3 +218,4 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
         Err(e) => Json(format!("CLI Error: {}", e)),
     }
 }
+
