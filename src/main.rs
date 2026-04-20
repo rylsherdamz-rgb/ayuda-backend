@@ -118,8 +118,8 @@ async fn register_citizen(
         return Json("ERROR: No card scanned recently".into());
     }
 
-    let contract_id = env::var("CONTRACT_ID").unwrap_or_default();
-    let admin_secret = env::var("ADMIN_SECRET").unwrap_or_default();
+    let contract_id = env::var("CONTRACT_ID").expect("CONTRACT_ID not set");
+    let admin_secret = env::var("ADMIN_SECRET").expect("ADMIN_SECRET not set");
 
     println!(
         "📝 [ADMIN] Registering {} with NFC {}",
@@ -139,7 +139,7 @@ async fn register_citizen(
             "--",
             "register_citizen",
             "--admin",
-            "GCJJ7WCTRWLR7YLOWZH6VGCYKZ62HG2N7US7AUQPT762GDN7HFA4Y7Q5",
+            "GBSPKSHOGWGYQE7IFYNRS6GU2HRXRL6XTPJIXH2OU6NGTVFSJ6XKIPMZ",
             "--citizen_addr",
             &p.citizen_addr,
             "--nfc_id",
@@ -150,13 +150,20 @@ async fn register_citizen(
         .output();
 
     match output {
-        Ok(out) if out.status.success() => Json("Success: Identity Committed".into()),
         Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            println!("❌ [STELLAR ERROR] {}", err);
-            Json(format!("Error: {}", err))
+            if out.status.success() {
+                println!("✅ [CHAIN] Identity Committed for {}", p.citizen_name);
+                Json("Success: Identity Committed".into())
+            } else {
+                let err = String::from_utf8_lossy(&out.stderr);
+                println!("❌ [CHAIN ERROR] {}", err);
+                Json(format!("Blockchain Error: {}", err))
+            }
         }
-        Err(e) => Json(format!("CLI Error: {}", e)),
+        Err(e) => {
+            println!("❌ [SYSTEM ERROR] Failed to execute CLI: {}", e);
+            Json(format!("CLI Error: {}", e))
+        }
     }
 }
 
@@ -170,7 +177,8 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
         return Json("ERROR: Physical card tap required".into());
     }
 
-    let contract_id = env::var("CONTRACT_ID").unwrap_or_default();
+    let contract_id = env::var("CONTRACT_ID").expect("CONTRACT_ID not set");
+    let admin_secret = env::var("ADMIN_SECRET").expect("ADMIN_SECRET not set");
 
     println!(
         "💰 [CLAIM] Processing claim for {} using NFC {}",
@@ -183,6 +191,8 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
             "invoke",
             "--id",
             &contract_id,
+            "--source-account",
+            &admin_secret,
             "--network",
             "testnet",
             "--",
@@ -195,13 +205,16 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
         .output();
 
     match output {
-        Ok(out) if out.status.success() => Json("Success: Funds Disbursed".into()),
         Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            println!("❌ [STELLAR ERROR] {}", err);
-            Json(format!("Error: {}", err))
+            if out.status.success() {
+                println!("✅ [CHAIN] Funds Disbursed to {}", p.beneficiary_addr);
+                Json("Success: Funds Disbursed".into())
+            } else {
+                let err = String::from_utf8_lossy(&out.stderr);
+                println!("❌ [CHAIN ERROR] {}", err);
+                Json(format!("Claim Denied: {}", err))
+            }
         }
         Err(e) => Json(format!("CLI Error: {}", e)),
     }
 }
-
