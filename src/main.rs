@@ -48,16 +48,15 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/health", get(|| async { "Ayuda Bridge Online" }))
-        // FIXED: Axum 0.8 uses {hash} syntax
-        .route("/api/scan/{hash}", get(handle_incoming_scan))
-        .route("/api/scan/{hash}", post(handle_incoming_scan))
+        .route("/api/scan/:hash", get(handle_incoming_scan))
+        .route("/api/scan/:hash", post(handle_incoming_scan))
         .route("/api/latest-scan", get(get_latest_scan))
         .route("/api/register", post(register_citizen))
         .route("/api/claim", post(claim_aid))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
-    let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let port = env::var("PORT").unwrap_or_else(|_| "10000".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
     println!("🚀 [SERVER] Ayuda Protocol Bridge starting on {}", addr);
@@ -65,7 +64,6 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-// 1. THIS CAPTURES THE SCAN FROM THE NFC HARDWARE
 async fn handle_incoming_scan(
     Path(hash): Path<String>,
     State(state): State<AppState>,
@@ -81,13 +79,10 @@ async fn handle_incoming_scan(
         timestamp: now,
     });
 
-    // THIS WILL LOG TO YOUR TERMINAL
     println!("💳 [SCAN] New Card Detected! Hash: {}", hash);
-
     Json(format!("Handshake Received: {}", hash))
 }
 
-// 2. THIS TELLS THE FRONTEND IF A CARD IS WAITING
 async fn get_latest_scan(State(state): State<AppState>) -> Json<ScanResponse> {
     let scan = state.latest_scan.lock().unwrap();
     let now = SystemTime::now()
@@ -97,7 +92,7 @@ async fn get_latest_scan(State(state): State<AppState>) -> Json<ScanResponse> {
 
     match &*scan {
         Some(data) => {
-            let is_fresh = (now - data.timestamp) < 60; // Valid for 60 seconds
+            let is_fresh = (now - data.timestamp) < 60;
             Json(ScanResponse {
                 nfc_hash: Some(data.hash.clone()),
                 is_fresh,
@@ -110,7 +105,6 @@ async fn get_latest_scan(State(state): State<AppState>) -> Json<ScanResponse> {
     }
 }
 
-// 3. ADMIN REGISTRATION
 async fn register_citizen(
     State(state): State<AppState>,
     Json(p): Json<RegisterRequest>,
@@ -124,6 +118,9 @@ async fn register_citizen(
         return Json("ERROR: No card scanned recently".into());
     }
 
+    let contract_id = env::var("CONTRACT_ID").unwrap_or_default();
+    let admin_secret = env::var("ADMIN_SECRET").unwrap_or_default();
+
     println!(
         "📝 [ADMIN] Registering {} with NFC {}",
         p.citizen_name, nfc_id
@@ -134,9 +131,9 @@ async fn register_citizen(
             "contract",
             "invoke",
             "--id",
-            &env::var("CONTRACT_ID").unwrap(),
+            &contract_id,
             "--source-account",
-            &env::var("ADMIN_SECRET").unwrap(),
+            &admin_secret,
             "--network",
             "testnet",
             "--",
@@ -154,11 +151,15 @@ async fn register_citizen(
 
     match output {
         Ok(out) if out.status.success() => Json("Success: Identity Committed".into()),
-        _ => Json("Error: Blockchain write failed".into()),
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            println!("❌ [STELLAR ERROR] {}", err);
+            Json(format!("Error: {}", err))
+        }
+        Err(e) => Json(format!("CLI Error: {}", e)),
     }
 }
 
-// 4. BENEFICIARY CLAIM
 async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -> Json<String> {
     let nfc_id = {
         let mut scan = state.latest_scan.lock().unwrap();
@@ -168,6 +169,8 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
     if nfc_id.is_empty() {
         return Json("ERROR: Physical card tap required".into());
     }
+
+    let contract_id = env::var("CONTRACT_ID").unwrap_or_default();
 
     println!(
         "💰 [CLAIM] Processing claim for {} using NFC {}",
@@ -179,7 +182,7 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
             "contract",
             "invoke",
             "--id",
-            &env::var("CONTRACT_ID").unwrap(),
+            &contract_id,
             "--network",
             "testnet",
             "--",
@@ -193,7 +196,12 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
 
     match output {
         Ok(out) if out.status.success() => Json("Success: Funds Disbursed".into()),
-        _ => Json("Error: Claim denied or verification failed".into()),
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            println!("❌ [STELLAR ERROR] {}", err);
+            Json(format!("Error: {}", err))
+        }
+        Err(e) => Json(format!("CLI Error: {}", e)),
     }
 }
 
