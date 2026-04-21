@@ -2,13 +2,17 @@
 FROM rust:1.81-slim-bookworm AS builder
 
 WORKDIR /app
-# Install build dependencies for SSL and Rust compilation
-RUN apt-get update && apt-get install -y pkg-config libssl-dev
 
-# Copy source code
+# Install build dependencies required for SSL/Crypto in Rust
+RUN apt-get update && apt-get install -y \
+  pkg-config \
+  libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# Copy your source code into the container
 COPY . .
 
-# Build the release binary
+# Build the release binary based on your [package] name "backend"
 RUN cargo build --release
 
 # --- Stage 2: Runtime Stage ---
@@ -16,25 +20,26 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# 1. Install necessary libraries for SSL and curl
+# 1. Install runtime dependencies (SSL and tools for the installer)
 RUN apt-get update && apt-get install -y \
   curl \
   ca-certificates \
   libssl3 \
   && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Stellar CLI (Pinned to v22.1.0 for stability with Soroban)
-# Note: Ensure the architecture matches (x86_64). 
-RUN curl -sSfL https://github.com/stellar/stellar-cli/releases/download/v22.1.0/stellar-cli-x86_64-unknown-linux-gnu.tar.gz | tar -xz && \
-  mv stellar /usr/local/bin/stellar && \
+# 2. Install Stellar CLI and move it to a global PATH
+# This ensures Command::new("stellar") works in your Rust code
+RUN curl -Lsf https://raw.githubusercontent.com/stellar/stellar-cli/main/install.sh | sh && \
+  mv /root/.cargo/bin/stellar /usr/local/bin/stellar && \
   chmod +x /usr/local/bin/stellar
 
-# 3. Copy the compiled backend binary from the builder stage
-COPY --from=builder /app/target/release/backend /usr/local/bin/ayuda-backend
+# 3. Copy the compiled 'backend' binary from Stage 1
+# Note: We rename it to 'ayuda-exe' here just to avoid confusion with folder names
+COPY --from=builder /app/target/release/backend /usr/local/bin/ayuda-exe
 
-# 4. Set Environment Variables defaults (Render will override these)
-ENV PORT=3000
-EXPOSE 3000
+# 4. Networking configuration
+ENV PORT=10000
+EXPOSE 10000
 
-# 5. Run the backend
-CMD ["ayuda-backend"]
+# 5. Launch the application
+CMD ["ayuda-exe"]
