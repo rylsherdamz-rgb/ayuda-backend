@@ -1,5 +1,5 @@
-use axum::extract::{Path, State};
 use axum::{
+    extract::{Path, State},
     routing::{get, post},
     Json, Router,
 };
@@ -55,6 +55,7 @@ async fn main() {
     };
 
     let app = Router::new()
+        .route("/api/health", get(|| async { "Ayuda Protocol Online" }))
         .route(
             "/api/scan/{hash}",
             get(handle_incoming_scan).post(handle_incoming_scan),
@@ -208,7 +209,7 @@ fn handle_stellar_output(
             if out.status.success() {
                 let xdr = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 let mut scan = state.latest_scan.lock().unwrap();
-                *scan = None; // Reset scan after successful XDR generation
+                *scan = None;
 
                 Json(TxResponse {
                     xdr,
@@ -228,3 +229,4 @@ fn handle_stellar_output(
         }),
     }
 }
+
