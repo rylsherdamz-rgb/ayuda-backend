@@ -1,5 +1,5 @@
+use axum::extract::{Path, State};
 use axum::{
-    extract::{Path, State},
     routing::{get, post},
     Json, Router,
 };
@@ -55,9 +55,10 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/api/health", get(|| async { "Ayuda Protocol Online" }))
-        .route("/api/scan/{hash}", get(handle_incoming_scan))
-        .route("/api/scan/{hash}", post(handle_incoming_scan))
+        .route(
+            "/api/scan/{hash}",
+            get(handle_incoming_scan).post(handle_incoming_scan),
+        )
         .route("/api/latest-scan", get(get_latest_scan))
         .route("/api/register", post(register_citizen))
         .route("/api/claim", post(claim_aid))
@@ -118,7 +119,7 @@ async fn register_citizen(
     Json(p): Json<RegisterRequest>,
 ) -> Json<TxResponse> {
     let nfc_id = {
-        let mut scan = state.latest_scan.lock().unwrap();
+        let scan = state.latest_scan.lock().unwrap();
         scan.as_ref().map(|s| s.hash.clone()).unwrap_or_default()
     };
 
@@ -130,11 +131,6 @@ async fn register_citizen(
     }
 
     let contract_id = env::var("CONTRACT_ID").expect("CONTRACT_ID not set");
-
-    println!(
-        "📝 [ADMIN] Building Registration XDR for {}",
-        p.citizen_name
-    );
 
     let output = Command::new("stellar")
         .args([
@@ -166,7 +162,7 @@ async fn register_citizen(
 
 async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -> Json<TxResponse> {
     let nfc_id = {
-        let mut scan = state.latest_scan.lock().unwrap();
+        let scan = state.latest_scan.lock().unwrap();
         scan.as_ref().map(|s| s.hash.clone()).unwrap_or_default()
     };
 
@@ -178,8 +174,6 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
     }
 
     let contract_id = env::var("CONTRACT_ID").expect("CONTRACT_ID not set");
-
-    println!("💰 [CLAIM] Generating XDR for {}", p.beneficiary_addr);
 
     let output = Command::new("stellar")
         .args([
@@ -213,9 +207,8 @@ fn handle_stellar_output(
         Ok(out) => {
             if out.status.success() {
                 let xdr = String::from_utf8_lossy(&out.stdout).trim().to_string();
-
                 let mut scan = state.latest_scan.lock().unwrap();
-                *scan = None;
+                *scan = None; // Reset scan after successful XDR generation
 
                 Json(TxResponse {
                     xdr,
@@ -235,4 +228,3 @@ fn handle_stellar_output(
         }),
     }
 }
-
