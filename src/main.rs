@@ -17,7 +17,7 @@ struct AppState {
     latest_scan: Arc<Mutex<Option<NfcData>>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct NfcData {
     hash: String,
     timestamp: u64,
@@ -40,6 +40,14 @@ struct ScanResponse {
     is_fresh: bool,
 }
 
+#[derive(Serialize)]
+struct TxResponse {
+    xdr: String,
+    status: String,
+}
+
+const ADMIN_PUBKEY: &str = "GAJPZCOVW34KTYF764X74ZRYOJIF3H2XKCRWH4CARVRZD5M4WJ2XVWLW";
+
 #[tokio::main]
 async fn main() {
     let state = AppState {
@@ -47,7 +55,7 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/api/health", get(|| async { "Ayuda Bridge Online" }))
+        .route("/api/health", get(|| async { "Ayuda Protocol Online" }))
         .route("/api/scan/{hash}", get(handle_incoming_scan))
         .route("/api/scan/{hash}", post(handle_incoming_scan))
         .route("/api/latest-scan", get(get_latest_scan))
@@ -59,7 +67,7 @@ async fn main() {
     let port = env::var("PORT").unwrap_or_else(|_| "10000".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
-    println!("🚀 [SERVER] Ayuda Protocol Bridge starting on {}", addr);
+    println!("🚀 [SERVER] Ayuda Bridge running on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -79,7 +87,7 @@ async fn handle_incoming_scan(
         timestamp: now,
     });
 
-    println!("💳 [SCAN] New Card Detected! Hash: {}", hash);
+    println!("💳 [SCAN] NFC Detected: {}", hash);
     Json(format!("Handshake Received: {}", hash))
 }
 
@@ -108,22 +116,24 @@ async fn get_latest_scan(State(state): State<AppState>) -> Json<ScanResponse> {
 async fn register_citizen(
     State(state): State<AppState>,
     Json(p): Json<RegisterRequest>,
-) -> Json<String> {
+) -> Json<TxResponse> {
     let nfc_id = {
         let mut scan = state.latest_scan.lock().unwrap();
-        scan.take().map(|s| s.hash).unwrap_or_default()
+        scan.as_ref().map(|s| s.hash.clone()).unwrap_or_default()
     };
 
     if nfc_id.is_empty() {
-        return Json("ERROR: No card scanned recently".into());
+        return Json(TxResponse {
+            xdr: "".into(),
+            status: "ERROR: Tap Required".into(),
+        });
     }
 
     let contract_id = env::var("CONTRACT_ID").expect("CONTRACT_ID not set");
-    let admin_secret = env::var("ADMIN_SECRET").expect("ADMIN_SECRET not set");
 
     println!(
-        "📝 [ADMIN] Registering {} with NFC {}",
-        p.citizen_name, nfc_id
+        "📝 [ADMIN] Building Registration XDR for {}",
+        p.citizen_name
     );
 
     let output = Command::new("stellar")
@@ -132,14 +142,16 @@ async fn register_citizen(
             "invoke",
             "--id",
             &contract_id,
-            "--source-account",
-            &admin_secret,
             "--network",
             "testnet",
+            "--source-account",
+            ADMIN_PUBKEY,
+            "--build-only",
+            "--base64",
             "--",
             "register_citizen",
             "--admin",
-            "GBSPKSHOGWGYQE7IFYNRS6GU2HRXRL6XTPJIXH2OU6NGTVFSJ6XKIPMZ",
+            ADMIN_PUBKEY,
             "--citizen_addr",
             &p.citizen_addr,
             "--nfc_id",
@@ -149,41 +161,25 @@ async fn register_citizen(
         ])
         .output();
 
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                println!("✅ [CHAIN] Identity Committed for {}", p.citizen_name);
-                Json("Success: Identity Committed".into())
-            } else {
-                let err = String::from_utf8_lossy(&out.stderr);
-                println!("❌ [CHAIN ERROR] {}", err);
-                Json(format!("Blockchain Error: {}", err))
-            }
-        }
-        Err(e) => {
-            println!("❌ [SYSTEM ERROR] Failed to execute CLI: {}", e);
-            Json(format!("CLI Error: {}", e))
-        }
-    }
+    handle_stellar_output(output, state)
 }
 
-async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -> Json<String> {
+async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -> Json<TxResponse> {
     let nfc_id = {
         let mut scan = state.latest_scan.lock().unwrap();
-        scan.take().map(|s| s.hash).unwrap_or_default()
+        scan.as_ref().map(|s| s.hash.clone()).unwrap_or_default()
     };
 
     if nfc_id.is_empty() {
-        return Json("ERROR: Physical card tap required".into());
+        return Json(TxResponse {
+            xdr: "".into(),
+            status: "ERROR: Tap Required".into(),
+        });
     }
 
     let contract_id = env::var("CONTRACT_ID").expect("CONTRACT_ID not set");
-    let admin_secret = env::var("ADMIN_SECRET").expect("ADMIN_SECRET not set");
 
-    println!(
-        "💰 [CLAIM] Processing claim for {} using NFC {}",
-        p.beneficiary_addr, nfc_id
-    );
+    println!("💰 [CLAIM] Generating XDR for {}", p.beneficiary_addr);
 
     let output = Command::new("stellar")
         .args([
@@ -191,10 +187,12 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
             "invoke",
             "--id",
             &contract_id,
-            "--source-account",
-            &admin_secret,
             "--network",
             "testnet",
+            "--source-account",
+            &p.beneficiary_addr,
+            "--build-only",
+            "--base64",
             "--",
             "claim_aid",
             "--citizen_addr",
@@ -204,18 +202,37 @@ async fn claim_aid(State(state): State<AppState>, Json(p): Json<ClaimRequest>) -
         ])
         .output();
 
+    handle_stellar_output(output, state)
+}
+
+fn handle_stellar_output(
+    output: Result<std::process::Output, std::io::Error>,
+    state: AppState,
+) -> Json<TxResponse> {
     match output {
         Ok(out) => {
             if out.status.success() {
-                println!("✅ [CHAIN] Funds Disbursed to {}", p.beneficiary_addr);
-                Json("Success: Funds Disbursed".into())
+                let xdr = String::from_utf8_lossy(&out.stdout).trim().to_string();
+
+                let mut scan = state.latest_scan.lock().unwrap();
+                *scan = None;
+
+                Json(TxResponse {
+                    xdr,
+                    status: "pending_signature".into(),
+                })
             } else {
                 let err = String::from_utf8_lossy(&out.stderr);
-                println!("❌ [CHAIN ERROR] {}", err);
-                Json(format!("Claim Denied: {}", err))
+                Json(TxResponse {
+                    xdr: "".into(),
+                    status: format!("Stellar Error: {}", err),
+                })
             }
         }
-        Err(e) => Json(format!("CLI Error: {}", e)),
+        Err(e) => Json(TxResponse {
+            xdr: "".into(),
+            status: format!("CLI Error: {}", e),
+        }),
     }
 }
 
